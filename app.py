@@ -154,11 +154,14 @@ def main():
         ["Power BI", "Tableau", "Looker", "QlikSense", "Google Data Studio"]
     )
 
-    uploaded_file = st.file_uploader("Upload Data File (CSV)", type="csv")
+    uploaded_file = st.file_uploader("Upload Data File (CSV or XLSX)", type=["csv", "xlsx"])
     
     if uploaded_file is not None:
         try:
-            df = pd.read_csv(uploaded_file)
+            if uploaded_file.name.endswith('.csv'):
+                df = pd.read_csv(uploaded_file)
+            else:
+                df = pd.read_excel(uploaded_file)
             
             # Data Analysis
             st.write("### Data Snapshot")
