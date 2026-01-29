@@ -6,9 +6,9 @@ import json
 from langchain_openai import ChatOpenAI
 import streamlit.components.v1 as components
 import os
-from utils import apply_apple_style
+from style_utils import apply_apple_style
 
-def generate_design_prompt(df_head, df_info, business_domain, report_type, user_feedback, api_key):
+def generate_design_prompt(df_head, df_info, business_domain, report_type, api_key):
     """
     Analyzes data and generates a specific PROMPT for the coding agent.
     """
@@ -29,14 +29,12 @@ Context:
 - Style: {report_type} (Strictly mimic the layout, color palette, and component style of {report_type})
 - Data Sample: {df_head}
 - Data Info: {df_info}
-- **Additional User Instructions**: "{user_feedback}"
 
 Your Prompts MUST include:
 1. Specific layout instructions typical of {report_type} (e.g., Tiled layout for Tableau, Canvas for Power BI).
 2. Which specific columns to use for X and Y axes.
 3. Which chart types (Bar, Line, etc.) are best for this data.
 4. Color palette instructions matching {report_type}'s default themes.
-5. Explicitly address any valid requests from the 'Additional User Instructions'.
 
 Output only the PROMPT text that I will feed into the coding agent.
 """
@@ -93,16 +91,17 @@ STRICT LAYOUT RULES:
 
 Requirements:
 1. Use **TailwindCSS** for styling (via CDN).
-2. Use **Chart.js** (via CDN) for visualizations.
+2. Use **Chart.js**, **PapaParse**, and **SheetJS** (via CDN) for visualizations and client-side data swap.
 3. The design must be modern, clean, and business-professional.
-4. Input data is provided as a CSV string snippet. Embed this data directly into the JavaScript variables for the charts.
-5. **CRITICAL**: The main page body background MUST always be WHITE (#ffffff). Do not use dark mode or gray backgrounds.
-6. EXECUTING THE DESIGN REQUIREMENTS:
+4. HYBRID LOADING: Pre-aggregate the data into `const initialData` JSON.
+5. **CRITICAL**: The dashboard theme MUST be DARK. Use a deep navy or black background (#0f172a, #0b0f19). Use light-colored text (#f8fafc) and high-contrast vibrant chart colors that stand out.
+6. **CLIENT-SIDE ENGINE**: Include a sleek button/uploader in the HTML that allows users to upload NEW CSV/XLSX files. When a new file is uploaded, the charts must update INSTANTLY using PapaParse/SheetJS without refreshing.
+7. Return ONLY the raw HTML. No explanations.
 """
 
         user_prompt = f"""
 Domain: {business_domain}
-Data Sample (First 5 rows):
+Data Sample:
 {df_head}
 
 Data Info:
@@ -111,7 +110,7 @@ Data Info:
 DESIGN INSTRUCTIONS (Follow Strictly):
 {design_safe_prompt}
 
-Generate the full HTML dashboard code now. Return ONLY the raw HTML.
+Generate the full premium dashboard HTML now.
 """
         
         messages = [
@@ -123,60 +122,27 @@ Generate the full HTML dashboard code now. Return ONLY the raw HTML.
         html_code = response.content.strip()
         
         # Cleanup
-        if html_code.startswith("```html"):
-            html_code = html_code[7:]
-        elif html_code.startswith("```"):
-            html_code = html_code[3:]
-        if html_code.endswith("```"):
-            html_code = html_code[:-3]
+        import re
+        html_match = re.search(r'```html\n(.*?)```', html_code, re.DOTALL) or re.search(r'```(.*?)```', html_code, re.DOTALL)
+        if html_match:
+            html_code = html_match.group(1).strip()
             
         return html_code
 
     except Exception as e:
         return f"Error generating dashboard: {e}"
 
-def generate_insights(df_head, df_info, api_key):
-    """
-    Generates a very short 3-bullet point summary.
-    """
-    try:
-        llm = ChatOpenAI(
-            model="google/gemini-3-flash-preview",
-            api_key=api_key,
-            base_url="https://openrouter.ai/api/v1",
-            temperature=0.3
-        )
-        
-        system_prompt = "You are a Senior Data Analyst. Goal: Very concise, high-level summary."
-        user_prompt = f"""
-Analyze this dataset structure and sample:
-- Info: {df_info}
-- Sample: {df_head}
-
-Output exactly 3 very short, punchy bullet points highlighting the most critical trends or columns.
-Format:
-- **Point**: Brief detail.
-"""
-        messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
-        response = llm.invoke(messages)
-        return response.content
-    except Exception as e:
-        return f"Could not generate insights: {e}"
-
 def main():
-    st.set_page_config(page_title="Data Viz Agent", page_icon=None, layout="wide")
+    st.set_page_config(page_title="Data Viz Generator", page_icon=None, layout="wide")
     apply_apple_style()
     st.title("Data Visualization Agent")
-    st.markdown("Upload data -> AI Insights -> AI Codes -> Live Dashboard.")
+    st.markdown("Upload data -> AI Analyzes -> AI Codes -> Live Dashboard.")
 
     # Sidebar Configuration
     st.sidebar.header("Configuration")
-    default_key = "YOUR_API_KEY_HERE"
-    # Secure API Key Loading
-    api_key = os.getenv("OPENROUTER_API_KEY", default_key)
     
-    st.sidebar.subheader("Step 1: Define Context")
-    st.sidebar.caption("Select the industry and the visual style you prefer.")
+    # Secure API Key Loading
+    api_key = os.getenv("GRAPH_API_KEY") or os.getenv("OPENROUTER_API_KEY", "your-api-key-here")
     
     business_domain = st.sidebar.selectbox(
         "Select Business Domain",
@@ -187,86 +153,107 @@ def main():
         "Dashboard Style",
         ["Power BI", "Tableau", "Looker", "QlikSense", "Google Data Studio"]
     )
-    
-    st.sidebar.subheader("Step 2: Upload Data")
-    st.sidebar.caption("Upload your CSV file to begin analysis.")
+
     uploaded_file = st.file_uploader("Upload Data File (CSV)", type="csv")
-    
-    insights = None
     
     if uploaded_file is not None:
         try:
             df = pd.read_csv(uploaded_file)
             
-            # Data Analysis (Main Area)
-            st.write("### 1. Data Snapshot")
-            st.dataframe(df.head(), use_container_width=True)
-            st.caption(f"Loaded {len(df)} rows.")
+            # Data Analysis
+            st.write("### Data Snapshot")
+            st.dataframe(df.head())
             
-            df_head = df.head().to_csv(index=False)
+            df_head = df.head(100).to_csv(index=False)
+            
             buffer = io.StringIO()
             df.info(buf=buffer)
             df_info = buffer.getvalue()
             
-            # User Feedback Input
-            st.write("### 2. Custom Instructions")
-            user_feedback = st.text_area(
-                "Add specific requirements (e.g., 'Focus on sales trend', 'Use red for losses'):",
-                placeholder="Ex: Start with a pie chart of regions..."
-            )
+            st.info(f"Loaded {len(df)} rows. Agent is ready.")
 
-            st.sidebar.subheader("Step 3: Generate")
-            st.sidebar.caption("Click below to create your dashboard.")
-            
-            if st.sidebar.button("Analyze & Generate Dashboard", type="primary"):
-                if not api_key:
-                    st.error("Please provide an API Key.")
+            # Custom Instruction Box
+            custom_instructions = st.text_area("Custom Instructions (Optional)", placeholder="e.g., Focus on regional sales trends, use deep blue accents...", help="Add specific details you want the AI to include in the dashboard design.")
+
+            if st.button("Analyze & Generate Dashboard", type="primary"):
+                if not api_key or api_key == "your-graph-api-key-here":
+                    st.error("Please provide a valid API Key in the environment.")
                     return
 
-                # 1. Prompt Generation Step
-                with st.spinner(f"Analyzing Data & Engineering {report_type} Style Prompt..."):
-                    generated_prompt = generate_design_prompt(df_head, df_info, business_domain, report_type, user_feedback, api_key)
+                # Progress Bar UX
+                progress_bar = st.progress(0, text="Analyzing dataset...")
+                import time
                 
-                # 2. Code Generation Step (Using the Prompt)
-                with st.spinner("Writing HTML/JS Code based on Prompt..."):
-                    html_code = generate_dashboard_html(df_head, df_info, business_domain, report_type, generated_prompt, api_key)
+                # 1. Prompt Generation Step
+                for percent_complete in range(40):
+                    time.sleep(0.01)
+                    progress_bar.progress(percent_complete + 1, text="Engineering Design specifications...")
+                
+                generated_prompt = generate_design_prompt(df_head, df_info, business_domain, report_type, api_key)
+                
+                # 2. Code Generation Step
+                for percent_complete in range(40, 90):
+                    time.sleep(0.01)
+                    progress_bar.progress(percent_complete + 1, text="Crafting HTML/JS Dashboard...")
+                
+                html_code = generate_dashboard_html(df_head, df_info, business_domain, report_type, generated_prompt + f"\n\nAdditional User Request: {custom_instructions}", api_key)
+                
+                for percent_complete in range(90, 100):
+                    time.sleep(0.01)
+                    progress_bar.progress(percent_complete + 1, text="Finalizing components...")
+                
+                progress_bar.empty()
                 
                 # 3. Output Handling
                 if "Error" in html_code:
                     st.error(html_code)
                 else:
-                    st.success("Dashboard Code Generated Successfully!")
+                    # Red Glass/Alert Notes
+                    st.markdown('<div style="color: #ff4b4b; background-color: #ffeaea; padding: 12px; border-radius: 8px; margin-bottom: 15px; font-weight: 500; border: 1px solid #ffcaca; text-align: center;">Please upload the data set below to the generated dashboard to get the accurate results</div>', unsafe_allow_html=True)
                     
-                    # SECTION 1: PREVIEW (TOP) - Always Visible
+                    st.markdown("""
+                        <div style="
+                            background: rgba(255, 75, 75, 0.1); 
+                            backdrop-filter: blur(10px); 
+                            -webkit-backdrop-filter: blur(10px);
+                            border: 1px solid rgba(255, 75, 75, 0.2);
+                            padding: 15px; 
+                            border-radius: 12px; 
+                            color: #ff4b4b; 
+                            font-weight: 500; 
+                            margin-bottom: 25px;
+                            text-align: center;
+                            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+                        ">
+                            Please download the dashboard and open it using any browser. 
+                            You can then upload data in the same format directly within the dashboard to dynamically change the visuals.
+                        </div>
+                    """, unsafe_allow_html=True)
+
+                    # SECTION 1: PREVIEW
                     st.divider()
-                    st.subheader(f"3. Live Dashboard Preview ({report_type} Style)")
+                    col_header, col_btn = st.columns([3, 1])
+                    with col_header:
+                        st.subheader(f"Live Data Preview ({report_type} Style)")
+                    with col_btn:
+                        st.download_button(
+                            label="Download Dashboard",
+                            data=html_code,
+                            file_name="dashboard.html",
+                            mime="text/html",
+                            type="primary",
+                            use_container_width=True
+                        )
+                    
                     components.html(html_code, height=800, scrolling=True)
-                    
-                    st.download_button(
-                        label="Download Dashboard.html",
-                        data=html_code,
-                        file_name="dashboard.html",
-                        mime="text/html"
-                    )
 
-                    # SECTION 2: PROMPT (BOTTOM)
+                    # SECTION 2: PROMPT
                     st.divider()
-                    with st.expander("📝 View AI Design Prompt Used", expanded=False):
+                    with st.expander("View AI Design Prompt Used", expanded=False):
                         st.markdown(generated_prompt)
-
-            # Generate Insights (Sidebar - Bottom)
-            if api_key:
-                st.sidebar.divider()
-                st.sidebar.subheader("AI Data Summary")
-                with st.sidebar:
-                    with st.spinner("Analyzing..."):
-                        if "insights" not in st.session_state:
-                             st.session_state.insights = generate_insights(df_head, df_info, api_key)
-                        st.info(st.session_state.insights)
 
         except Exception as e:
             st.error(f"Error reading file: {e}")
 
 if __name__ == "__main__":
     main()
-
